@@ -1,0 +1,147 @@
+name: Slash Command Dispatch
+
+# Listens for slash commands in PR comments and dispatches the corresponding
+# workflow via a repository_dispatch event.
+#
+# Supported commands:
+#   /run-tests   – triggers the "run-tests" CI job (see run-tests.yml)
+#
+# To add a new command:
+#   1. Add a step below that matches on the new command string.
+#   2. Create a new workflow file that triggers on:
+#        repository_dispatch:
+#          types: [slash-<command-name>]
+#
+# Security: only repository collaborators with write (push) access can
+# trigger a slash command.  Anyone else will have their comment ignored.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  checks: write
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  dispatch:
+    # Only act on PR comments that start with a slash.
+    if: >
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/')
+
+    runs-on: ubuntu-latest
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. Verify the commenter has write (push) access to the repository.
+      #    This prevents untrusted users from triggering CI jobs.
+      # ------------------------------------------------------------------
+      - name: Check commenter permissions
+        id: permission
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              username: context.actor,
+            });
+            const level = data.permission;
+            // 'admin', 'write', or 'maintain' are all acceptable
+            const allowed = ['admin', 'write', 'maintain'].includes(level);
+            core.setOutput('allowed', String(allowed));
+            if (!allowed) {
+              core.info(`@${context.actor} has permission level "${level}" – ignoring command.`);
+            }
+
+      # ------------------------------------------------------------------
+      # 2. Parse the slash command from the first word of the comment.
+      # ------------------------------------------------------------------
+      - name: Parse command
+        id: parse
+        if: steps.permission.outputs.allowed == 'true'
+        run: |
+          # Extract the first token after the leading slash.
+          COMMAND=$(echo "$COMMENT" | head -1 | sed 's|^/||' | awk '{print $1}')
+          echo "command=${COMMAND}" >> "$GITHUB_OUTPUT"
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+
+      # ------------------------------------------------------------------
+      # 3. React to the comment so the user knows their command was seen.
+      # ------------------------------------------------------------------
+      - name: Acknowledge command
+        if: steps.permission.outputs.allowed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner:      context.repo.owner,
+              repo:       context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content:    'eyes',
+            });
+
+      # ------------------------------------------------------------------
+      # 4. Retrieve the PR's head SHA so that the target workflow can
+      #    attach its check run to the right commit.
+      # ------------------------------------------------------------------
+      - name: Get PR head SHA
+        id: pr
+        if: steps.permission.outputs.allowed == 'true'
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner:       context.repo.owner,
+              repo:        context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            core.setOutput('sha', pr.head.sha);
+            core.setOutput('ref', pr.head.ref);
+            return pr.head.sha;
+
+      # ------------------------------------------------------------------
+      # 5. Dispatch a repository_dispatch event for each known command.
+      #    Add extra steps here for additional slash commands.
+      # ------------------------------------------------------------------
+      - name: Dispatch /run-tests
+        if: >
+          steps.permission.outputs.allowed == 'true' &&
+          steps.parse.outputs.command == 'run-tests'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner:      context.repo.owner,
+              repo:       context.repo.repo,
+              event_type: 'slash-run-tests',
+              client_payload: {
+                pr_number: context.issue.number,
+                sha:       '${{ steps.pr.outputs.sha }}',
+                ref:       '${{ steps.pr.outputs.ref }}',
+                actor:     context.actor,
+              },
+            });
+
+      # ------------------------------------------------------------------
+      # 6. Warn when an unrecognised command is used.
+      # ------------------------------------------------------------------
+      - name: Warn unknown command
+        if: >
+          steps.permission.outputs.allowed == 'true' &&
+          steps.parse.outputs.command != 'run-tests'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const command = '${{ steps.parse.outputs.command }}';
+            await github.rest.issues.createComment({
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              issue_number: context.issue.number,
+              body: `⚠️ Unknown slash command \`/${command}\`.\n\n**Available commands:**\n- \`/run-tests\` – run the test suite`,
+            });
