@@ -1,0 +1,71 @@
+name: Slash Command Check
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: read
+
+jobs:
+  run-check:
+    if: >
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/run-check')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get PR info
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            return pr.data.head.sha;
+
+      - name: Create "pending" check
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = '${{ steps.pr.outputs.result }}';
+
+            const res = await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'run-check',
+              head_sha: sha,
+              status: 'in_progress'
+            });
+
+            return res.data.id;
+
+      - name: Run your logic
+        id: run
+        run: |
+          echo "Running check..."
+          # simulate success/failure
+          exit 0
+
+      - name: Complete check
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const check_id = ${{ steps.check.outputs.result }};
+            const sha = '${{ steps.pr.outputs.result }}';
+            const conclusion = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+
+            await github.rest.checks.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              check_run_id: check_id,
+              status: 'completed',
+              conclusion: conclusion
+            });
