@@ -68,12 +68,7 @@ jobs:
         run: |
           echo "Running tests for PR #${{ github.event.client_payload.pr_number }}"
           echo "Commit: ${{ github.event.client_payload.sha }}"
-          # ---------------------------------------------------------------
-          # Add your actual test commands here, for example:
-          #   npm ci && npm test
-          #   go test ./...
-          #   pytest
-          # ---------------------------------------------------------------
+          bash test.sh
 
       # ------------------------------------------------------------------
       # 4a. Mark the check run as successful.
