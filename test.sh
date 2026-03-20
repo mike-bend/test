@@ -56,5 +56,15 @@ if ! grep -q "checks.create" .github/workflows/run-tests.yml; then
 fi
 echo "PASS"
 
+# Test 7: Verify slash-command-dispatch.yml has contents: write (fix from PR #7).
+#         The dispatch workflow calls repos.createDispatchEvent which requires
+#         contents: write.  Previously it was contents: read, causing a 403.
+echo "Test 7: slash-command-dispatch.yml has 'contents: write' permission"
+if ! grep -q "contents: write" .github/workflows/slash-command-dispatch.yml; then
+  echo "FAIL: 'contents: write' not found in slash-command-dispatch.yml (was it accidentally reverted to 'contents: read'?)"
+  exit 1
+fi
+echo "PASS"
+
 echo ""
 echo "=== All tests passed ==="
